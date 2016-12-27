@@ -68,6 +68,7 @@ public class PortForwarder {
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
+                        close(key);
                     }
                 }
                 iterator.remove();
@@ -99,11 +100,15 @@ public class PortForwarder {
         SocketChannel channel = ((SocketChannel) key.channel());
         Attachment attachment = ((Attachment) key.attachment());
 
-        channel.finishConnect();
-        attachment.out = ((Attachment) attachment.pairKey.attachment()).in;
-        ((Attachment) attachment.pairKey.attachment()).out = attachment.in;
-        attachment.pairKey.interestOps(SelectionKey.OP_READ);
-        key.interestOps(SelectionKey.OP_READ);
+        if (channel.finishConnect() == true) {
+            attachment.out = ((Attachment) attachment.pairKey.attachment()).in;
+            ((Attachment) attachment.pairKey.attachment()).out = attachment.in;
+            attachment.pairKey.interestOps(SelectionKey.OP_READ);
+            key.interestOps(SelectionKey.OP_READ);
+        }
+        else{
+            close(key);
+        }
     }
 
     private static void read(SelectionKey key) throws IOException {
@@ -116,8 +121,7 @@ public class PortForwarder {
             attachment.pairKey.interestOps(attachment.pairKey.interestOps() | SelectionKey.OP_WRITE); //говорим, чтобы второй конец принимал данные
             key.interestOps(key.interestOps() ^ SelectionKey.OP_READ); //убираем интерес на передачу данных у сработавшего соединения
             attachment.in.flip(); //готовим буффер для записи
-        }
-        else{
+        } else {
             close(key);
         }
     }
@@ -128,28 +132,31 @@ public class PortForwarder {
 
         int count = channel.write(attachment.out);
         if (count > 0) { //успешно прочитали данные
+            if(attachment.pairKey == null ){ //
+                close(key);
+            }
             attachment.out.compact();
             System.out.println("was write " + count + " to " + key);
-            ((Attachment) attachment.pairKey.attachment()).inIsRead = true;
             attachment.pairKey.interestOps(attachment.pairKey.interestOps() | SelectionKey.OP_READ);// Добавялем ко второму концу интерес на чтение
             if (attachment.out.hasRemaining()) {
                 key.interestOps(key.interestOps() ^ SelectionKey.OP_WRITE); // у своего убираем интерес на запись
             }
-        }
-        else{
+        } else {
             close(key);
         }
     }
 
-    private static void close(SelectionKey key) throws IOException{
+    private static void close(SelectionKey key) throws IOException {
         key.channel().close();
         key.cancel();
         SelectionKey pairKey = ((Attachment) key.attachment()).pairKey;
 
-        pairKey.channel().close();
-        pairKey.cancel();
+        if(pairKey != null) {
+            ((Attachment) pairKey.attachment()).pairKey = null;
+            pairKey.interestOps(SelectionKey.OP_WRITE);
+        }
     }
 }
 
 
-
+//докачать данные из буффера перед закрытием если одна сторона закрыла соединение
